@@ -2698,14 +2698,22 @@ function say(text,rate){ if(!('speechSynthesis' in window)){ if(!voiceWarned){to
   if(!JA_VOICE && !voiceWarned && speechSynthesis.getVoices().length){ voiceWarned=true; toast('Япон дуу хоолой олдсонгүй — төхөөрөмжийн тохиргооноос японы хоолой нэмээрэй',4500); } }catch(e){} }
 const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
 let MIC_OK = !!SR;
-function listenJa(){ return new Promise((res,rej)=>{ let r; try{ r=new SR(); }catch(e){ return rej('nosr'); } r.lang='ja-JP'; r.interimResults=false; r.maxAlternatives=5; let got=false, fin=false;
- r.onresult=e=>{ got=true; fin=true; res([...e.results[0]].map(a=>a.transcript)); };
- r.onerror=e=>{ if(fin) return; fin=true; rej(e.error||'err'); };
- r.onend=()=>{ if(!fin){ fin=true; rej('nospeech'); } };
- try{ r.start(); }catch(e){ fin=true; rej('start'); }
- setTimeout(()=>{ try{r.stop();}catch(e){} },7000); }); }
-function speechMatch(alts,w){ const n=s=>toHira(String(s)).replace(/[\s。、？！?!.,]/g,''); const W=n(w.w), R=n(w.r);
- return alts.some(a=>{ const A=n(a); return A===W||A===R||A.includes(W)||sim(A,R)>=0.75||sim(A,W)>=0.75; }); }
+function listenJa(){ return new Promise((res,rej)=>{ let r; try{ r=new SR(); }catch(e){ return rej('nosr'); }
+ r.lang='ja-JP'; r.interimResults=true; r.continuous=true; r.maxAlternatives=5;
+ const heard=[]; let fin=false, quiet=null, hard=null, gotFinal=false, lastErr=null;
+ const finish=()=>{ if(fin) return; fin=true; clearTimeout(quiet); clearTimeout(hard); try{ r.stop(); }catch(e){} if(heard.length) res(heard.slice().reverse()); else rej(lastErr||'nospeech'); };
+ r.onresult=e=>{ for(let i=0;i<e.results.length;i++){ const R=e.results[i]; for(let j=0;j<R.length;j++){ const t=String(R[j].transcript||'').trim(); if(t && !heard.includes(t)) heard.push(t); } if(R.isFinal) gotFinal=true; }
+  clearTimeout(quiet); quiet=setTimeout(finish, gotFinal?300:1200); };
+ r.onerror=e=>{ lastErr=e.error||'err'; if(['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(lastErr)){ fin=true; clearTimeout(hard); clearTimeout(quiet); rej(lastErr); } };
+ r.onend=()=>finish();
+ try{ r.start(); }catch(e){ fin=true; return rej('start'); }
+ hard=setTimeout(finish,6500); }); }
+const RMAP={}; WORDS.forEach(x=>{ (RMAP[x.w]=RMAP[x.w]||new Set()).add(toHira(x.r)); });
+function speechMatch(alts,w){ const n=s=>toHira(String(s)).replace(/[\s。、？！?!.,「」]/g,''); const W=n(w.w), R=n(w.r);
+ return alts.some(a=>{ const A=n(a); if(!A) return false; if(A===W||A===R||A.includes(W)||A.includes(R)||sim(A,R)>=0.75||sim(A,W)>=0.75) return true; const rs=RMAP[A]; return !!(rs&&rs.has(R)); }); }
+let NOSPEECH=0;
+const SR_ERR={'not-allowed':'Микрофоны зөвшөөрөл өгөөгүй байна.','service-not-allowed':'Дуу таних үйлчилгээ хаалттай байна (Dictation асаалттай эсэхийг шалгаарай).','audio-capture':'Микрофон олдсонгүй.','language-not-supported':'Япон хэлний дуу таних суугаагүй байна.','network':'Дуу таних үйлчилгээнд интернэт хэрэгтэй.','nosr':'Энэ браузер дуу таних боломжгүй.','start':'Микрофон эхлүүлж чадсангүй.'};
+const SR_HINT='<div class="notice" style="text-align:left">💡 <b>iPad / iPhone:</b> Settings → General → Keyboard → <b>Enable Dictation</b> асаах, мөн Keyboards → Add New Keyboard → <b>Japanese</b> нэмэх.<br><b>Mac:</b> System Settings → Keyboard → <b>Dictation</b> асаах.<br><b>Windows/Android:</b> Chrome ашиглаарай.</div>';
 
 /* ================= PROGRESS ================= */
 const INT=[0,1,2,4,8,16,32];
@@ -2778,7 +2786,7 @@ function qWrite(it,guide){ return {type:'write',item:it,guide,reward:(ok,info)=>
 
 /* ================= SESSION RUNNER ================= */
 let S=null;
-function startSession(title,qs,opt={}){ qs=qs.filter(Boolean); if(!qs.length){ toast('Асуулт олдсонгүй'); return; } touchDay(); inSession=true; document.body.classList.add('in-session'); S={title,qs,opt,i:0,correct:0,combo:0,maxCombo:0,xp:0,coins:0,locked:false}; renderQ(); window.scrollTo(0,0); }
+function startSession(title,qs,opt={}){ qs=qs.filter(Boolean); if(!qs.length){ toast('Асуулт олдсонгүй'); return; } touchDay(); inSession=true; document.body.classList.add('in-session'); MIC_OK=!!SR; NOSPEECH=0; S={title,qs,opt,i:0,correct:0,combo:0,maxCombo:0,xp:0,coins:0,locked:false}; renderQ(); window.scrollTo(0,0); }
 function renderQ(){ const q=S.qs[S.i];
  V.innerHTML=`<div class="session"><div class="sbar"><button class="iconbtn" data-act="quit" aria-label="Гарах">✕</button><div class="prog"><div style="width:${S.i/S.qs.length*100}%"></div></div><div class="combo ${S.combo>=2?'on':''}">🔥${S.combo}</div></div><div class="small muted" style="margin:-6px 0 8px">${esc(S.title)} · ${S.i+1}/${S.qs.length}</div><div class="qcard" id="qcard"></div><div id="fb"></div></div>`;
  RENDER[q.type](q,$('#qcard'),(ok,extra,info)=>answered(q,ok,extra,info)); }
@@ -2816,14 +2824,15 @@ const RENDER={
   box.innerHTML=`<div class="qlabel">Чангаар дуудаж хэлээрэй</div>${bigWord(w)}<div class="mnsmall">${esc(w.m)}</div><div class="row center"><button class="btn ghost" data-act="say" data-arg="${esc(w.r)}">🔊 Сонсох</button><button class="btn ghost" data-act="sayslow" data-arg="${esc(w.r)}">🐢 Удаан</button></div><div id="micarea"></div>`;
   say(w.r); const area=$('#micarea',box);
   const selfMode=()=>{ area.innerHTML=`<p class="small muted" style="margin-top:14px">Сонсоод, чангаар 2–3 удаа давтаж хэлээд өөрийгөө үнэлээрэй.</p><div class="row center"><button class="btn" id="sbad">🔁 Дахиад хэрэгтэй</button><button class="btn primary" id="sgood">😊 Сайн хэлсэн</button></div>`;
-   $('#sgood',area).onclick=()=>done(true,'',{self:true}); $('#sbad',area).onclick=()=>done(false); };
-  if(!MIC_OK) return selfMode();
-  area.innerHTML=`<button class="micbtn" id="mic" aria-label="Микрофон">🎤</button><div class="small muted" id="mst">Товчийг дараад хэлээрэй</div><button class="btn ghost small" id="skipmic" style="margin-top:8px">Микрофонгүйгээр</button>`;
-  $('#skipmic',area).onclick=()=>{ MIC_OK=false; selfMode(); };
-  $('#mic',area).onclick=async()=>{ if(S.locked) return; const st=$('#mst',area), mb=$('#mic',area); try{speechSynthesis.cancel();}catch(e){} mb.classList.add('rec'); st.textContent='Сонсож байна… 👂';
+   $('#sgood',area).onclick=()=>done(true,'',{self:true}); $('#sbad',area).onclick=()=>done(false);
+   if(SR){ area.insertAdjacentHTML('beforeend','<div style="margin-top:10px"><button class="btn ghost" id="backmic">🎤 Микрофоноор оролдох</button></div>'); $('#backmic',area).onclick=()=>{ MIC_OK=true; micMode(); }; } };
+  const micMode=()=>{
+  area.innerHTML=`<button class="micbtn" id="mic" aria-label="Микрофон">🎤</button><div class="small muted" id="mst">Товчийг дараад <b>чангаар</b> хэлээрэй</div>`;
+  $('#mic',area).onclick=async()=>{ if(S.locked) return; const st=$('#mst',area), mb=$('#mic',area); try{speechSynthesis.cancel();}catch(e){} mb.classList.add('rec'); st.textContent='Сонсож байна… 👂 одоо хэлээрэй'; await new Promise(r=>setTimeout(r,250));
    try{ const alts=await listenJa(); mb.classList.remove('rec'); const heard=`<div class="small" style="margin-top:6px">Сонссон: <b class="jp">${esc(alts[0]||'')}</b></div>`;
-    if(speechMatch(alts,w)) done(true,heard); else { tries++; if(tries>=3) done(false,heard); else st.innerHTML=`Сонссон: <b class="jp">${esc(alts[0]||'—')}</b> — дахин оролдоорой (${tries}/3)`; } }
-   catch(err){ mb.classList.remove('rec'); if(['no-speech','nospeech','aborted','network'].includes(err) && err!=='network') st.textContent='Дуу сонсогдсонгүй. Дахин дараарай.'; else { MIC_OK=false; toast('Микрофон ашиглах боломжгүй — өөрөө үнэлэх горимд шилжлээ',3500); selfMode(); } } }; },
+    NOSPEECH=0; if(speechMatch(alts,w)) done(true,heard); else { tries++; if(tries>=3) done(false,heard); else st.innerHTML=`Сонссон: <b class="jp">${esc(alts[0]||'—')}</b> — дахин оролдоорой (${tries}/3)`; } }
+   catch(err){ mb.classList.remove('rec'); if(['no-speech','nospeech','aborted'].includes(err)){ NOSPEECH++; st.innerHTML='Дуу сонсогдсонгүй. Товчийг дараад <b>чангаар, ойроос</b> хэлээрэй.'+(NOSPEECH>=2?SR_HINT:''); } else { st.innerHTML=esc(SR_ERR[err]||('Алдаа: '+err))+SR_HINT; MIC_OK=false; setTimeout(()=>{ if(!S||S.locked) return; selfMode(); },4500); toast('Микрофоноор шалгах боломжгүй — өөрөө үнэлэх горимд шилжинэ',3500); } } }; };
+  if(MIC_OK) micMode(); else selfMode(); },
  write(q,box,done){ const it=q.item, guide=q.guide;
   box.innerHTML=`<div class="qlabel">${guide?'Саарал үсгийг дагаж бичээрэй':'Цээжээр бичээрэй'}</div><div class="wprompt"><b class="romaji" style="font-size:24px">${esc(it.r)}</b>${it.m?`<span class="muted">· ${esc(it.m)}</span>`:''}<button class="iconbtn" data-act="say" data-arg="${esc(it.say||it.k)}">🔊</button></div><div class="padwrap"><canvas id="pad"></canvas></div><div class="row center"><button class="btn ghost" id="undo">↶ Буцаах</button><button class="btn ghost" id="clr">🗑 Арилгах</button><button class="btn primary" id="chk">Шалгах</button></div>`;
   const pad=makePad($('#pad',box),it.k,guide);
